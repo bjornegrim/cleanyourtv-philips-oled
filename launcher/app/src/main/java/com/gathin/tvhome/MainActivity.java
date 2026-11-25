@@ -450,6 +450,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (festive) updateWifiLabel();
             sky.update();
             wallpaperPlayer.update();
+            updateWarmth();
             handler.postDelayed(this, MINUTE_MS);
         }
     };
@@ -476,6 +477,32 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** clock_format, for the race panel's session times (the TextClocks take it in onCreate). */
     private String clockFormat = "system";
     private java.util.Map<Integer, String> homeHoldAppKeys = java.util.Collections.emptyMap();
+    /** habit_focus, focus_tilt, time_warmth and soft_entrance as configured (see Config). */
+    private boolean habitFocus, focusTilt, timeWarmth, softEntrance;
+    /** ui_sounds: the tick and OK sounds; null when off. */
+    private UiSounds sounds;
+    /** Preference (Config.SETTINGS_NAME): elapsedRealtime when Home last went out of sight, so a process the system
+     *  killed during a short trip to an app still counts the trip as short (habit_focus). */
+    private static final String HIDDEN_AT_KEY = "home_hidden_at";
+    /** focus_tilt: the D-pad press (its uptimeMillis) the last lean was for, so a refit within it leans nothing again. */
+    private long tiltedFor = -1;
+    /** soft_entrance: uptimeMillis the entrance ends; the glass fades in only then, on the rows' final place. */
+    private long entranceEnds;
+    /** habit_focus: the next focus restore goes to the app opened most at this time of day (HabitFocus). */
+    private boolean habitPending;
+    /** soft_entrance: play it at the next resume. recreated: this Home came from recreate(), which gets no entrance. */
+    private boolean entrancePending, recreated;
+    /** The OLED pixel shift onResume gives the grid. The glass follows it, not the soft entrance's passing offset. */
+    private float pixelShift;
+    /** The last D-pad direction and its uptimeMillis: a focus change right after it came from the remote. */
+    private int lastDpadKey;
+    private long lastDpadAt = -1;
+    /** time_warmth: the day sunTimes ({sunrise, sunset} in minutes) are for, and the current Warmth.amount. */
+    private LocalDate warmthDay;
+    private int[] sunTimes;
+    private float warmth;
+    /** The Home that is resumed, for HomeKeyService's Settings button (settingsPanel); empty otherwise. */
+    private static java.lang.ref.WeakReference<MainActivity> front = new java.lang.ref.WeakReference<>(null);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -546,7 +573,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         spotlight = cfg.spotlightFocus;
         peekRow = cfg.peekRow && cfg.dockRow && !cfg.singleRow;
         restDimMs = cfg.restDimSeconds * 1000L;
-        if (spotlight) glass.setSpotlight();
+        habitFocus = cfg.habitFocus;
+        focusTilt = cfg.focusTilt && animations && !reducedMotion;
+        timeWarmth = cfg.timeWarmth;
+        softEntrance = cfg.softEntrance && animations && !reducedMotion;
+        recreated = savedInstanceState != null;
+        if (cfg.uiSounds) sounds = new UiSounds(this);
+        if (spotlight) {
+            glass.setSpotlight(cfg.focusRim);
+            if (!cfg.focusRim) {
+                // Under the header and the rows (the view before it in activity_main), so the opaque tiles cover the
+                // glow and it needs no hole (GlassView).
+                int under = root.indexOfChild(glass) - 1;
+                root.removeView(glass);
+                root.addView(glass, under);
+            }
+        }
         if (festive) glass.setAccent(festival.accentColor());
         ambient = findViewById(R.id.ambient);
         // The glow is one bitmap, so its alpha can be applied while drawing it. Otherwise every frame of
@@ -727,8 +769,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (dockRow) grid.addItemDecoration(new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass, cfg.dockEvenPadding, cfg.dockBand,
                 singleRow, cfg.dockBandAll));
         if (cfg.fadeRows) TopFade.attach(grid, 48 * density);
-        // Reduced motion: the tiles are simply there, with no entrance (reloadApps skips it there too).
-        if (animations && !reducedMotion) {
+        // Reduced motion: the tiles are simply there, with no entrance (reloadApps skips it there too). soft_entrance
+        // brings the rows in as a whole instead (playEntrance).
+        if (animations && !reducedMotion && !softEntrance) {
             grid.setLayoutAnimation(new LayoutAnimationController(
                     AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.06f));
         }
@@ -895,6 +938,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             ((TextView) btnSettings).setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_home_settings_pill, 0, 0, 0);
         }
         btnSettings.setOnClickListener(v -> {
+            if (sounds != null) sounds.ok();
             if (launcherSettingsButton) startActivityForResult(
                     new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
             else if (settingsKeyPanel) startActivity(quickSettingsUnder(v));
@@ -1143,6 +1187,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         super.onStart();
         stopped = false;
         started = true;
+        habitPending = habitFocus && HabitFocus.longAway(getSharedPreferences(Config.SETTINGS_NAME, MODE_PRIVATE)
+                .getLong(HIDDEN_AT_KEY, 0), SystemClock.elapsedRealtime());
+        entrancePending = softEntrance && !recreated;
+        recreated = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(timeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -1169,6 +1217,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             recreate();
             return;
         }
+        front = new java.lang.ref.WeakReference<>(this);
+        if (focusTilt) animatorScale = Settings.Global.getFloat(getContentResolver(),
+                Settings.Global.ANIMATOR_DURATION_SCALE, 1f);
+        updateWarmth();   // before the focus comes back below, so the glow is tinted for now
         restartIdleClock();
         promptsPaused = false;
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
@@ -1219,9 +1271,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         homeResumeTime = System.currentTimeMillis();
         if (grid != null) {
             float shift = (float) ((Math.random() * 6.0 - 3.0) * density);
+            pixelShift = shift;
             grid.setTranslationY(shift);
             // The glass sits on the shifted tile (spotlight_focus); with no rebuild nothing else moves it there.
             grid.post(this::refitGlass);
+            if (entrancePending) {
+                entrancePending = false;
+                playEntrance();
+            }
         }
     }
 
@@ -1342,6 +1399,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         cards = moduleCards ? CardFeature.run(() -> Cards.discover(this, hiddenApps,
                 () -> Cards.load(Cards.storeFile(this)), leanback), none) : none;
         adapter.reload(cards.isEmpty() ? none : CardFeature.run(() -> Cards.shown(cards), none), leanback);
+        if (habitFocus && adapter.appCount() > 0) {
+            // habit_focus: drop the counts of apps no longer on Home. Not on an empty list, which a failed query gives.
+            Set<String> onHome = new HashSet<>();
+            for (int i = 0; i < adapter.appCount(); i++) onHome.add(adapter.keyAt(i));
+            HabitFocus.prune(this, onHome);
+        }
         lastFocusedKey = returnKey;
         lastFocused = returnSlot;
         packageSequence = currentPackageSequence(packageSequence);
@@ -1357,6 +1420,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         final int returnSlot = lastFocused;
         grid.post(() -> {
             int pos = adapter.positionOf(returnKey);
+            if (habitPending) {
+                // habit_focus: back after a long time away, so start on the app opened most at this time of day.
+                habitPending = false;
+                int habit = habitTile();
+                if (habit >= 0) pos = habit;
+            }
             if (returnToLibrary || libraryFocusPending) focusLibrary();
             else focusTile(pos >= 0 ? pos : returnSlot);
             tilesReady = true;
@@ -1383,6 +1452,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onPause() {
         super.onPause();
         resumed = false;
+        if (front.get() == this) front.clear();
         // No UP reaches a paused Home, so a vendor-key hold it saw go down would still open its app later.
         // Only Home's own share is dropped: a key service that saw the same DOWN keeps its hold.
         RemoteKeys.release(this);
@@ -1418,6 +1488,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onStop() {
         super.onStop();
         started = false;
+        if (habitFocus) getSharedPreferences(Config.SETTINGS_NAME, MODE_PRIVATE).edit()
+                .putLong(HIDDEN_AT_KEY, SystemClock.elapsedRealtime()).apply();
         unregisterReceiver(timeReceiver);
         clockRefresh.stop();
         handler.removeCallbacks(clockCheck);
@@ -1471,6 +1543,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** Hides the glass when focus leaves the tiles (added in onCreate, removed in onDestroy). */
     private final ViewTreeObserver.OnGlobalFocusChangeListener glassFocusListener = (oldF, newF) -> {
         boolean onTile = newF != null && newF.getId() == R.id.card;
+        // A move the remote's D-pad made (not a focus Home restores by itself): ui_sounds ticks. focus_tilt leans the
+        // tile from onTileFocused: Android calls this listener before the tile's own, which cancels its animations.
+        if (newF != null && newF != oldF && dpadMoveNow() && sounds != null) sounds.tick();
         if (!onTile) hideGlass();
         if (newF != null && newF.getId() == R.id.btnSettings && (centeredHome || spotlight)) {
             // The mockup names the gear under the rows, and no tile is lit while it has focus.
@@ -1492,6 +1567,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (tree.isAlive()) tree.removeOnGlobalFocusChangeListener(glassFocusListener);
         RemoteKeys.release(this);
         cancelHoldOk();
+        if (sounds != null) sounds.release();
         if (gameDay != null) gameDay.shutdown();
         unregisterReceiver(packageReceiver);
         if (openOnStartOnWake) unregisterReceiver(wakeReceiver);
@@ -1514,18 +1590,30 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      * nothing even on Home.
      */
     private boolean handleSettingsKey(KeyEvent event) {
-        for (int code : settingsKeycodes) {
-            if (event.getKeyCode() != code) continue;
-            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
-                Intent settings = settingsKeyPanel ? new Intent(this, QuickSettingsActivity.class)
-                        : systemIntent(Settings.ACTION_SETTINGS);
-                // settings_key_clear_task, as in HomeKeyService: Back from Settings goes Home, not to a vendor page.
-                if (settingsKeyClearTask && !settingsKeyPanel) settings.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                open(settings);
-            }
-            return true;
+        // settings_key_panel: the plain Settings key too, as HomeKeyService counts it, when that service is not on.
+        boolean settingsKey = settingsKeyPanel && event.getKeyCode() == KeyEvent.KEYCODE_SETTINGS;
+        for (int code : settingsKeycodes) settingsKey |= event.getKeyCode() == code;
+        if (!settingsKey) return false;
+        if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
+            // The panel opens under the gear, as when the gear itself is chosen.
+            Intent settings = settingsKeyPanel ? quickSettingsUnder(findViewById(R.id.btnSettings))
+                    : systemIntent(Settings.ACTION_SETTINGS);
+            // settings_key_clear_task, as in HomeKeyService: Back from Settings goes Home, not to a vendor page.
+            if (settingsKeyClearTask && !settingsKeyPanel) settings.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            open(settings);
         }
-        return false;
+        return true;
+    }
+
+    /**
+     * The quick settings panel for the remote's Settings button (HomeKeyService): under the gear while Home is in
+     * front, as when the gear itself is chosen; at its usual place over anything else.
+     */
+    static Intent settingsPanel(Context ctx) {
+        MainActivity home = front.get();
+        return home != null && home.resumed && !home.isFinishing()
+                ? home.quickSettingsUnder(home.findViewById(R.id.btnSettings))
+                : new Intent(ctx, QuickSettingsActivity.class);
     }
 
     // ---- reorder ---------------------------------------------------------------------------------
@@ -1544,6 +1632,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     public boolean dispatchKeyEvent(KeyEvent event) {
         // A real key, not onUserInteraction: that also runs when the firmware starts Live TV over Home at power-on.
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            int code = event.getKeyCode();
+            if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT
+                    || code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN) {
+                lastDpadKey = code;
+                lastDpadAt = event.getEventTime();
+            }
             HomeKeyService.keyOnHome();
             // Every key, also those handled below without super (Move, Back, Options): onUserInteraction misses them.
             restartIdleClock();
@@ -2124,6 +2218,138 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 .putExtra(QuickSettingsActivity.EXTRA_END, root.getWidth() - at.right);
     }
 
+    /** ui_sounds: OK on a tile, just before it opens. */
+    @Override
+    public void onTilePressed() {
+        if (sounds != null) sounds.ok();
+    }
+
+    /** A D-pad press counts for the focus change it causes for this long (a held key repeats faster). */
+    private static final long DPAD_MOVE_MS = 300;
+    /**
+     * focus_tilt: how far the newly focused tile leans, and how long it takes on screen to settle flat. On screen:
+     * the TV's animator duration scale (0.5 on the owner's TV) is divided out for the lean only.
+     */
+    private static final float TILT_DEGREES = 5f;
+    private static final int TILT_MS = 320;
+    /** The running lean, so a new lean of the same tile replaces it. */
+    private android.animation.ObjectAnimator tiltAnim;
+    /** The TV's animator duration scale, read in onResume (ValueAnimator.getDurationScale needs API 33). */
+    private float animatorScale = 1f;
+
+    private boolean dpadMoveNow() {
+        return lastDpadAt >= 0 && SystemClock.uptimeMillis() - lastDpadAt < DPAD_MOVE_MS;
+    }
+
+    /**
+     * focus_tilt: the tile turns towards the D-pad direction, its leading edge a little closer, holds the lean for a
+     * moment and eases back flat, TILT_MS on screen. Its own animator, not the tile's ViewPropertyAnimator, which the
+     * zoom uses: the zoom's focus listener cancels that one, and a listener set on it would carry over to the zoom.
+     * The tile is drawn from a hardware layer while it leans (the zoom's own layer ends sooner and drops it, so the
+     * update puts it back) and loses it on end or cancel. Not while reordering or carrying a tile (Move).
+     */
+    private void tilt(View card, int keyCode) {
+        if (card.getWidth() == 0 || tiltedFor == lastDpadAt || reordering || movingKey != null) return;
+        tiltedFor = lastDpadAt;
+        float rx = 0f, ry = 0f;
+        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) ry = -TILT_DEGREES;
+        else if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) ry = TILT_DEGREES;
+        else if (keyCode == KeyEvent.KEYCODE_DPAD_UP) rx = -TILT_DEGREES;
+        else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) rx = TILT_DEGREES;
+        float scale = animatorScale;
+        if (scale <= 0f) return;   // animations switched off on the TV
+        if (tiltAnim != null && tiltAnim.getTarget() == card) tiltAnim.cancel();
+        // A close camera: at the default distance a few degrees change the tile by under a pixel.
+        card.setCameraDistance(card.getWidth() * 1.5f);
+        android.animation.ObjectAnimator lean = android.animation.ObjectAnimator.ofPropertyValuesHolder(card,
+                android.animation.PropertyValuesHolder.ofFloat(View.ROTATION_X, rx, 0f),
+                android.animation.PropertyValuesHolder.ofFloat(View.ROTATION_Y, ry, 0f));
+        lean.setDuration(Math.round(TILT_MS / scale));
+        lean.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+        lean.addUpdateListener(a -> {
+            if (card.getLayerType() != View.LAYER_TYPE_HARDWARE) card.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        });
+        lean.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationCancel(android.animation.Animator a) {
+                card.setLayerType(View.LAYER_TYPE_NONE, null);
+                card.setRotationX(0f);
+                card.setRotationY(0f);
+            }
+
+            @Override
+            public void onAnimationEnd(android.animation.Animator a) {
+                card.setLayerType(View.LAYER_TYPE_NONE, null);
+                if (tiltAnim == a) tiltAnim = null;
+            }
+        });
+        tiltAnim = lean;
+        lean.start();
+    }
+
+    /** habit_focus: the tile opened most often at this time of day, or -1 when none has a habit yet. */
+    private int habitTile() {
+        List<String> keys = new ArrayList<>(adapter.appCount());
+        for (int i = 0; i < adapter.appCount(); i++) keys.add(adapter.keyAt(i));
+        return HabitFocus.pick(HabitFocus.counts(this, keys, java.time.LocalTime.now().getHour()));
+    }
+
+    /** soft_entrance: the clock first, the rows ENTRANCE_STAGGER_MS later, each ENTRANCE_MS; 240 ms in all. */
+    private static final int ENTRANCE_MS = 180, ENTRANCE_STAGGER_MS = 60;
+
+    /**
+     * soft_entrance: the clock block, then the rows (and the name under them), fade in rising 8dp. Alpha and
+     * translationY only, each under a short hardware layer; keys work at once. The glass fades in on its own.
+     */
+    private void playEntrance() {
+        if (resting) return;
+        entranceEnds = SystemClock.uptimeMillis() + ENTRANCE_STAGGER_MS + ENTRANCE_MS;
+        float rise = 8f * density;
+        enter(clockBlock, 0, 0f, rise);
+        enter(grid, ENTRANCE_STAGGER_MS, pixelShift, rise);
+        View info = findViewById(R.id.focusInfo);
+        if (info != null && info.getVisibility() == View.VISIBLE) enter(info, ENTRANCE_STAGGER_MS, 0f, rise);
+    }
+
+    private void enter(View v, int delay, float restY, float rise) {
+        v.animate().cancel();
+        v.setAlpha(0f);
+        v.setTranslationY(restY + rise);
+        v.animate().alpha(1f).translationY(restY).setStartDelay(delay).setDuration(ENTRANCE_MS)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.5f)).withLayer().start();
+        v.animate().setStartDelay(0);   // the delay would otherwise carry over to the rest dim's fades
+    }
+
+    /** time_warmth: the colour shifted for this time of day; unchanged while it is off or by day. */
+    private int warm(int argb) {
+        return timeWarmth ? Warmth.shift(argb, warmth) : argb;
+    }
+
+    /**
+     * time_warmth, from onResume and the minute tick: works out the warmth for now and, when it moved a step, tints
+     * the aura and the spotlight glow of the focused tile again. Nothing redraws when it did not move.
+     */
+    private void updateWarmth() {
+        if (!timeWarmth) return;
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        if (!now.toLocalDate().equals(warmthDay)) {
+            warmthDay = now.toLocalDate();
+            sunTimes = WallpaperMood.sun(warmthDay, getString(R.string.latitude), getString(R.string.longitude),
+                    java.time.ZoneId.systemDefault());
+        }
+        float w = Warmth.amount(now.getHour() * 60 + now.getMinute(), sunTimes[0], sunTimes[1]);
+        if (w == warmth) return;
+        warmth = w;
+        int pos = focusedTilePosition();
+        if (pos < 0 || pos >= adapter.appCount()) return;
+        int colour = warm(adapter.ambientColorAt(pos));
+        if (aura != null) aura.getBackground().setTint(0xFF000000 | colour);
+        if (glassAccent != 0 && !festive && !reordering) {
+            glassAccent = colour;
+            glass.setAccent(colour);
+        }
+    }
+
     /** rest_dim_seconds: how dim everything but the clock gets. */
     private static final float REST_ALPHA = 0.25f;
 
@@ -2253,7 +2479,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         boolean lifted = advancedEffects && !DockSlots.inDockRow(dockRow, singleRow, position, COLUMNS);
         float y = r.exactCenterY() + item.getTranslationY() - h / 2f - (lifted ? 4f * density : 0f);
         // The OLED pixel shift moves the grid, not the glass: the white rim must still sit on its tile.
-        if (spotlight) y += grid.getTranslationY();
+        if (spotlight) y += pixelShift;
 
         ViewGroup.LayoutParams lp = glass.getLayoutParams();
         if (lp.width != (int) w || lp.height != (int) h || card.getWidth() != glassCardW) {
@@ -2265,13 +2491,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         glassCardW = card.getWidth();
         glassCardRect.set(r);
-        glassGridShift = grid.getTranslationY();
+        glassGridShift = pixelShift;
         glassTargetX = x;
         glassTargetY = y;
         // Cinematic shelf: the highlight glows in the dock app's colour, plain white in the grid (and on the dock with
         // cinematic_white_focus). app_glow: every tile. In a single row every tile is the dock's kind.
         boolean coloured = (appGlow || cinematic && !cinematicWhiteFocus && (singleRow || position < COLUMNS)) && !festive;
-        int accent = coloured ? adapter.ambientColorAt(position) : 0;
+        int accent = coloured ? warm(adapter.ambientColorAt(position)) : 0;
         if ((cinematic || appGlow) && !festive && !reordering && accent != glassAccent) {
             glassAccent = accent;
             glass.setAccent(accent);
@@ -2281,7 +2507,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             springY.cancel();
             glass.setTranslationX(x);
             glass.setTranslationY(y);
-            if (animations && !reducedMotion) glass.animate().alpha(1f).setDuration(180).start();
+            if (animations && !reducedMotion) {
+                // soft_entrance: not while the rows still rise into place, or the glow sits 8dp off them.
+                long wait = Math.max(0, entranceEnds - SystemClock.uptimeMillis());
+                glass.animate().alpha(1f).setStartDelay(wait).setDuration(180).start();
+                glass.animate().setStartDelay(0);
+            }
             else glass.setAlpha(1f);
             glassShown = true;
         } else if (!animations) {
@@ -2297,8 +2528,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             spotlitTile = position;
             refreshTileLook(true);
         }
+        // Last in the tile's own focus listener, after it cancelled its animations and set the zoom going.
+        if (focusTilt && dpadMoveNow()) tilt(card, lastDpadKey);
         if (centeredHome) updateFocusInfo(position);
-        if (aura != null) aura.getBackground().setTint(0xFF000000 | adapter.ambientColorAt(position));
+        if (aura != null) aura.getBackground().setTint(0xFF000000 | warm(adapter.ambientColorAt(position)));
         if (dockRow && (singleRow || position < COLUMNS)) {
             // Dock: park it at the bottom of the screen and show the top shelf for this app. In a single row
             // every tile is in the dock's row, which never scrolls vertically.
@@ -2340,7 +2573,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         r.set(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
         if (!glassShown || card.getWidth() != glassCardW || glass.getWidth() != w || glass.getHeight() != h
-                || !glassCardRect.equals(r) || spotlight && glassGridShift != grid.getTranslationY()) {
+                || !glassCardRect.equals(r) || spotlight && glassGridShift != pixelShift) {
             onTileFocused(pos, card);
         }
     }

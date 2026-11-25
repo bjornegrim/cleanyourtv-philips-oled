@@ -63,6 +63,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         void onLibraryUp();
         /** A tile whose launch_actions entry is "input:<id>": switch to that TV input instead of opening an app. */
         void onOpenInput(String inputId);
+
+        /** OK on a tile, before it opens (ui_sounds). */
+        default void onTilePressed() {
+        }
     }
 
     static final class Entry {
@@ -196,6 +200,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final boolean centered;
     /** press_feedback: OK presses the tile in for PRESS_MS before its app opens. */
     private final boolean pressFeedback;
+    /** habit_focus: every launch from a tile counts for its block of the day (HabitFocus). */
+    private final boolean habitFocus;
     /** How far OK presses the focused tile in: 1.12 down to 1.075. */
     static final float PRESS_SCALE = 1.075f / 1.12f;
     static final int PRESS_MS = 90;
@@ -255,6 +261,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.spotlight = cfg.spotlightFocus;
         this.centered = centered;
         this.pressFeedback = cfg.pressFeedback && cfg.animations;
+        this.habitFocus = cfg.habitFocus;
         this.launchActions = cfg.launchActions;
         this.iconTiles = new HashSet<>(Arrays.asList(ctx.getResources().getStringArray(R.array.icon_tiles)));
         this.tileMenu = cfg.tileMenu;
@@ -525,7 +532,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             h.label.setText(e.label);
             h.label.setVisibility(uniformTiles ? View.GONE : View.VISIBLE);
         }
+        h.card.setRotationX(0f);   // focus_tilt: a recycled tile never keeps a lean
+        h.card.setRotationY(0f);
         h.card.setOnClickListener(v -> {
+            listener.onTilePressed();
             if (!pressFeedback) {
                 launch(e);
                 return;
@@ -590,6 +600,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
             ctx.startActivity(i, opts);
             if (cinematic) LastOpened.record(ctx, e.pkg);
+            if (habitFocus) HabitFocus.record(ctx, e.component.flattenToShortString(),
+                    java.time.LocalTime.now().getHour());
             if (ctx instanceof Activity) {
                 ((Activity) ctx).overridePendingTransition(0, 0);
             }
@@ -973,6 +985,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
             card.setOnFocusChangeListener((view, focused) -> {
                 view.animate().cancel();
+                // A cancelled withLayer() animation (the zoom, press_feedback) never runs its end action, which would
+                // put the layer type back: drop the hardware layer here, or the tile keeps it for good.
+                view.setLayerType(View.LAYER_TYPE_NONE, null);
+                // focus_tilt: the cancel above can stop a lean half way; a tile never stays tilted.
+                view.setRotationX(0f);
+                view.setRotationY(0f);
                 banner.animate().cancel();
                 name.animate().cancel();
                 float scale = !animations ? 1f : advancedEffects || spotlight ? 1.12f : 1.10f;

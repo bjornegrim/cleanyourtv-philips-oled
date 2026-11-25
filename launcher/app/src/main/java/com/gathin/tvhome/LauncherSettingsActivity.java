@@ -46,6 +46,9 @@ public final class LauncherSettingsActivity extends Activity {
     private boolean animations;
     private boolean advancedEffects;
     private int idleClockMinutes;
+    private boolean uiSounds;
+    private boolean focusRim;
+    private boolean focusTilt;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -161,6 +164,28 @@ public final class LauncherSettingsActivity extends Activity {
         fastScreensaverChoice.setOnClickListener(v -> {
             boolean next = !choices.getBoolean("fast_screensaver", true);
             choices.edit().putBoolean("fast_screensaver", next).apply();
+            changed();
+            refresh();
+        });
+        // ui_sounds and focus_rim: saved on the TV, over config.xml and a theme (Config.UI_SOUNDS_KEY, FOCUS_RIM_KEY).
+        uiSounds = config.uiSounds;
+        focusRim = config.focusRim;
+        focusTilt = config.focusTilt;
+        findViewById(R.id.focusTiltChoice).setOnClickListener(v -> {
+            focusTilt = !focusTilt;
+            choices.edit().putBoolean(Config.FOCUS_TILT_KEY, focusTilt).apply();
+            changed();
+            refresh();
+        });
+        findViewById(R.id.uiSoundsChoice).setOnClickListener(v -> {
+            uiSounds = !uiSounds;
+            choices.edit().putBoolean(Config.UI_SOUNDS_KEY, uiSounds).apply();
+            changed();
+            refresh();
+        });
+        findViewById(R.id.focusRimChoice).setOnClickListener(v -> {
+            focusRim = !focusRim;
+            choices.edit().putBoolean(Config.FOCUS_RIM_KEY, focusRim).apply();
             changed();
             refresh();
         });
@@ -363,6 +388,12 @@ public final class LauncherSettingsActivity extends Activity {
         TextView fastScreensaverChoice = findViewById(R.id.fastScreensaverChoice);
         boolean fastOn = choices.getBoolean("fast_screensaver", true);
         fastScreensaverChoice.setText(getString(R.string.fast_screensaver_label, getString(fastOn ? R.string.on : R.string.off)));
+        ((TextView) findViewById(R.id.uiSoundsChoice)).setText(getString(R.string.ui_sounds_state,
+                getString(uiSounds ? R.string.on : R.string.off)));
+        ((TextView) findViewById(R.id.focusRimChoice)).setText(getString(R.string.focus_rim_state,
+                getString(focusRim ? R.string.on : R.string.off)));
+        ((TextView) findViewById(R.id.focusTiltChoice)).setText(getString(R.string.focus_tilt_state,
+                getString(focusTilt ? R.string.on : R.string.off)));
         followThemeChoice.setSelected(!hasOnTvChoices());
     }
 

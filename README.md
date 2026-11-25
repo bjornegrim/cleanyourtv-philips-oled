@@ -9,7 +9,8 @@ A personal fork of [CleanYourTV](https://github.com/Gathin23/cleanyourtv), with 
 - A centred "spotlight" Home screen. The focused app steps forward with a glow in the app's colour and the others dim. Row 2 is smaller and dimmed until focus moves there. A "Last opened" line sits under the focused app's name. A faint aura in the app's colour sits behind the clock. OK gives a short press-down feel.
 - Rest mode: after 30 s without a key, everything except the clock fades. No frames are drawn while Home rests.
 - Weather with a "feels like" temperature, from [Open-Meteo](https://open-meteo.com/), for a configurable latitude/longitude.
-- Double Back goes to the clock screensaver, which now has a slow aurora behind the clock (OpenGL ES 2.0, 960x540 at 15 fps, about 6 ms GPU per frame). Its colours follow the screensaver's minute-by-minute colour cycle; TVs whose GPU cannot run it keep the plain glow.
+- Double Back goes to the clock screensaver, which now has a slow aurora behind the clock (OpenGL ES 2.0, 960x540 at 30 fps, 6 to 10 ms GPU per frame). Its colours follow the screensaver's minute-by-minute colour cycle; TVs whose GPU cannot run it keep the plain glow.
+- The screensaver's sky follows the weather and the time of day: the aurora on a clear night, strongest in the middle of it, then snow, rain and fog or overcast as themselves, a warm horizon at dawn and dusk and a dark, cold sky by day. From 23:00 to 06:00 a night mode turns the clock, date and weather warm red and the sky dim.
 - OLED pixel shift: Home drifts a few pixels each time it comes back, against burn-in.
 - The Options key opens the tile menu.
 - A simpler Quick Settings panel: TV settings, Network, Apps, Launcher settings.

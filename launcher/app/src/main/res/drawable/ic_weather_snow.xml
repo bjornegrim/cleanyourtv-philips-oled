@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Weather line icon (WeatherIcon): thin rounded strokes, no fill, tinted with the weather line's own colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group android:translateY="-3.5">
+        <path
+            android:pathData="M6.5,18H17.5A4,4 0 0,0 17.5,10A5.5,5.5 0 0,0 7.2,11.2A3.5,3.5 0 0,0 6.5,18Z"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="1.5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
+    <path
+        android:pathData="M7.2,18.2L8.8,19.8 M8.8,18.2L7.2,19.8 M11.2,19.7L12.8,21.3 M12.8,19.7L11.2,21.3 M15.2,18.2L16.8,19.8 M16.8,18.2L15.2,19.8"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

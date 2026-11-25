@@ -279,6 +279,10 @@ final class Config {
     final boolean clockGlow;
     /** Northern lights behind the clock screensaver's glow, on black only (config.xml, clock_aurora). */
     final boolean clockAurora;
+    /** With clock_aurora, the sky follows the weather and the time of day: aurora, snow, rain, fog (clock_weather_scenes). */
+    final boolean clockWeatherScenes;
+    /** From 23:00 to 06:00 the clock screensaver turns warm red and dim (clock_night_mode). */
+    final boolean clockNightMode;
     /** Every app in the dock's row, which scrolls sideways, and no grid below it (config.xml, single_row); needs dock_row. */
     final boolean singleRow;
     /** With single_row, the band runs behind every app in the row, not only the dock apps (config.xml, dock_band_all). */
@@ -295,6 +299,19 @@ final class Config {
     final boolean pressFeedback;
     /** Seconds without a key before everything but the clock dims (rest_dim_seconds); 0 is off. */
     final int restDimSeconds;
+    /** After 30 minutes away, focus starts on the app opened most at this time of day (habit_focus; HabitFocus). */
+    final boolean habitFocus;
+    /** The newly focused tile leans 5 degrees towards the D-pad direction and settles back (focus_tilt; Launcher settings can override it). */
+    final boolean focusTilt;
+    /** A soft tick on focus moves and a deeper sound on OK (ui_sounds; Launcher settings can override it). */
+    final boolean uiSounds;
+    /** The aura and the spotlight glow shift slightly warm in the evening and at night (time_warmth; Warmth). */
+    final boolean timeWarmth;
+    /** The clock, then the rows, fade and rise in when Home appears after a cold start or an app (soft_entrance). */
+    final boolean softEntrance;
+    /** The thin white rim around the spotlit tile (focus_rim; Launcher settings can override it). */
+    final boolean focusRim;
+    static final String UI_SOUNDS_KEY = "ui_sounds", FOCUS_RIM_KEY = "focus_rim", FOCUS_TILT_KEY = "focus_tilt";
 
     private Config(List<String> dockApps, boolean fillDock, List<String> hiddenApps, List<String> libraryApps, List<String> libraryExcludedApps, String liveTvPackage,
                    String liveTvAction, String liveTvInputId, Map<String, String> launchActions, Map<String, String> appLabels,
@@ -312,7 +329,17 @@ final class Config {
                    Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean volumePausesFilter, boolean homeIgnoreChannelKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockGlow, String glassStyle, boolean singleRow, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly, boolean inputsCecStateOnly,
                    int openOnStartNetworkWait, boolean openOnStartOnWake, boolean iconOnlyVpn, String clockFormat, boolean glowSnap,
                    boolean settingsKeyClearTask, boolean centeredHome, boolean spotlightFocus, boolean peekRow,
-                   boolean clockAura, boolean pressFeedback, int restDimSeconds, boolean clockAurora) {
+                   boolean clockAura, boolean pressFeedback, int restDimSeconds, boolean clockAurora,
+                   boolean habitFocus, boolean focusTilt, boolean uiSounds, boolean timeWarmth, boolean softEntrance,
+                   boolean focusRim, boolean clockWeatherScenes, boolean clockNightMode) {
+        this.clockWeatherScenes = clockWeatherScenes;
+        this.clockNightMode = clockNightMode;
+        this.habitFocus = habitFocus;
+        this.focusTilt = focusTilt;
+        this.uiSounds = uiSounds;
+        this.timeWarmth = timeWarmth;
+        this.softEntrance = softEntrance;
+        this.focusRim = focusRim;
         this.centeredHome = centeredHome;
         this.spotlightFocus = spotlightFocus;
         this.peekRow = peekRow;
@@ -510,6 +537,12 @@ final class Config {
         boolean clockAura = res.getBoolean(R.bool.clock_aura);
         boolean pressFeedback = res.getBoolean(R.bool.press_feedback);
         int restDimSeconds = res.getInteger(R.integer.rest_dim_seconds);
+        boolean habitFocus = res.getBoolean(R.bool.habit_focus);
+        boolean focusTilt = res.getBoolean(R.bool.focus_tilt);
+        boolean uiSounds = res.getBoolean(R.bool.ui_sounds);
+        boolean timeWarmth = res.getBoolean(R.bool.time_warmth);
+        boolean softEntrance = res.getBoolean(R.bool.soft_entrance);
+        boolean focusRim = res.getBoolean(R.bool.focus_rim);
         boolean libraryButton = res.getBoolean(R.bool.library_button);
         boolean showLibraryPill = res.getBoolean(R.bool.show_library_pill);
         int wifiLabelWidth = res.getInteger(R.integer.wifi_label_width);
@@ -572,6 +605,8 @@ final class Config {
         int clockWallpaperDim = res.getInteger(R.integer.clock_wallpaper_dim);
         boolean clockGlow = res.getBoolean(R.bool.clock_glow);
         boolean clockAurora = res.getBoolean(R.bool.clock_aurora);
+        boolean clockWeatherScenes = res.getBoolean(R.bool.clock_weather_scenes);
+        boolean clockNightMode = res.getBoolean(R.bool.clock_night_mode);
         String glassStyle = res.getString(R.string.glass_style);
         boolean singleRow = res.getBoolean(R.bool.single_row);
         boolean dockBandAll = res.getBoolean(R.bool.dock_band_all);
@@ -633,6 +668,12 @@ final class Config {
             clockAura = bool(json, "clock_aura", clockAura);
             pressFeedback = bool(json, "press_feedback", pressFeedback);
             restDimSeconds = integer(json, "rest_dim_seconds", restDimSeconds, 0, 3600);
+            habitFocus = bool(json, "habit_focus", habitFocus);
+            focusTilt = bool(json, "focus_tilt", focusTilt);
+            uiSounds = bool(json, "ui_sounds", uiSounds);
+            timeWarmth = bool(json, "time_warmth", timeWarmth);
+            softEntrance = bool(json, "soft_entrance", softEntrance);
+            focusRim = bool(json, "focus_rim", focusRim);
             libraryButton = bool(json, "library_button", libraryButton);
             showLibraryPill = bool(json, "show_library_pill", showLibraryPill);
             wifiLabelWidth = integer(json, "wifi_label_width", wifiLabelWidth, 0, 300);
@@ -695,6 +736,8 @@ final class Config {
             clockWallpaperDim = integer(json, "clock_wallpaper_dim", clockWallpaperDim, 0, 90);
             clockGlow = bool(json, "clock_glow", clockGlow);
             clockAurora = bool(json, "clock_aurora", clockAurora);
+            clockWeatherScenes = bool(json, "clock_weather_scenes", clockWeatherScenes);
+            clockNightMode = bool(json, "clock_night_mode", clockNightMode);
             singleRow = bool(json, "single_row", singleRow);
             dockBandAll = bool(json, "dock_band_all", dockBandAll);
             glowStyle = string(json, "glow_style", glowStyle);
@@ -723,6 +766,10 @@ final class Config {
         // Screensaver delay chosen in Launcher Settings.
         int chosenIdleMinutes = choices.getInt("idle_clock_minutes", -1);
         if (chosenIdleMinutes >= 0) idleClockMinutes = chosenIdleMinutes;
+        // The three switches in Launcher settings win over config.xml and a theme; a theme push does not clear them.
+        uiSounds = choices.getBoolean(UI_SOUNDS_KEY, uiSounds);
+        focusTilt = choices.getBoolean(FOCUS_TILT_KEY, focusTilt);
+        focusRim = choices.getBoolean(FOCUS_RIM_KEY, focusRim);
         File wallpaper = dir != null ? new File(dir, WALLPAPER_NAME) : null;
         if (wallpaper != null && !(wallpaper.isFile() && wallpaper.length() > 0)) wallpaper = null;
         // A theme can also switch the wallpaper off while the file is still there.
@@ -774,7 +821,8 @@ final class Config {
                 dateBelowClock, vpnPill, locale, powerOnHomeAlways, inputsConnectedOnly, inputsCecStateOnly,
                 Math.max(0, Math.min(600, openOnStartNetworkWait)), openOnStartOnWake, iconOnlyVpn, clockFormat, glowSnap,
                 settingsKeyClearTask, centeredHome, spotlightFocus, peekRow, clockAura, pressFeedback,
-                Math.max(0, restDimSeconds), clockAurora);
+                Math.max(0, restDimSeconds), clockAurora, habitFocus, focusTilt, uiSounds, timeWarmth, softEntrance,
+                focusRim, clockWeatherScenes, clockNightMode);
     }
 
     /**

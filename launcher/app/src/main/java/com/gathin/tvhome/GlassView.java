@@ -35,6 +35,8 @@ public class GlassView extends View {
     private boolean halo;
     /** spotlight_focus: a wide soft glow in the app's colour around the tile and a thin white rim, nothing over the tile. */
     private boolean spotlight;
+    /** focus_rim: the spotlight's thin white rim; false leaves the glow alone. */
+    private boolean spotRim = true;
     private final Paint spotGlow = new Paint(Paint.FILTER_BITMAP_FLAG);
     /** The glow's mask (ALPHA_8, drawn in spotGlow's colour), one per tile size: the dock's and the smaller peek row's. */
     private Bitmap glowMask, otherMask;
@@ -57,8 +59,9 @@ public class GlassView extends View {
      * spotlight_focus. The glow reaches well past the tile, so the view is larger: callers place it with inset()
      * around the tile instead of the glass's 6dp.
      */
-    void setSpotlight() {
+    void setSpotlight(boolean withRim) {
         spotlight = true;
+        spotRim = withRim;
         rim.setStrokeWidth(1.5f * density);
         rim.setColor(0xEBFFFFFF);
         spotGlow.setColor(0x8CFFFFFF);
@@ -107,8 +110,11 @@ public class GlassView extends View {
     }
 
     /**
-     * The blurred ring around the tile as an alpha mask, made on the CPU once per size and kept for the other row's
-     * size too, so moving between rows does not blur again. A colour change only changes spotGlow's colour.
+     * The blurred glow around the tile as an alpha mask, made on the CPU once per size and kept for the other row's
+     * size too, so moving between rows does not blur again. A colour change only changes spotGlow's colour. Without
+     * focus_rim no hole is cut for the tile: MainActivity puts this view under the rows, so the tile itself covers the
+     * glow. A hole moving with the spring showed the black background between it and the tile, which also zooms and
+     * leans. The rim has to be drawn over the tile, so with it the view stays on top and the hole stays.
      */
     private Bitmap spotlightMask() {
         int w = getWidth(), h = getHeight();
@@ -126,10 +132,12 @@ public class GlassView extends View {
         float spread = 9f * density;
         c.drawRoundRect(rect.left - spread, rect.top - spread, rect.right + spread, rect.bottom + spread,
                 radius + spread, radius + spread, p);
-        // Nothing over the tile itself, so its artwork keeps its colours.
-        Paint cut = new Paint(Paint.ANTI_ALIAS_FLAG);
-        cut.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
-        c.drawRoundRect(rect, radius, radius, cut);
+        if (spotRim) {
+            // Nothing over the tile itself, so its artwork keeps its colours.
+            Paint cut = new Paint(Paint.ANTI_ALIAS_FLAG);
+            cut.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+            c.drawRoundRect(rect, radius, radius, cut);
+        }
         glowMask = mask;
         return mask;
     }
@@ -148,7 +156,7 @@ public class GlassView extends View {
         if (spotlight) {
             Bitmap mask = spotlightMask();
             if (mask != null) canvas.drawBitmap(mask, 0, 0, spotGlow);
-            canvas.drawRoundRect(rect, radius, radius, rim);
+            if (spotRim) canvas.drawRoundRect(rect, radius, radius, rim);
             return;
         }
 

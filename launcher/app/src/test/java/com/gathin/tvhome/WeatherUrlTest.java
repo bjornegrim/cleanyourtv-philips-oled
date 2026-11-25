@@ -13,6 +13,8 @@ public class WeatherUrlTest {
         String url = WeatherUrl.of(" 48.85", "2.35 ");
         assertNotNull(url);
         assertTrue(url.contains("latitude=48.85&longitude=2.35&"));
+        // WeatherIcon picks the sun or the moon from it.
+        assertTrue(url.contains("is_day"));
     }
 
     @Test

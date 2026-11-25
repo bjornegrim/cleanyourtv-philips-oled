@@ -2,6 +2,7 @@ package com.gathin.tvhome;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.graphics.drawable.Drawable;
 import android.os.SystemClock;
 import android.view.View;
 import android.widget.TextView;
@@ -34,6 +35,9 @@ final class Weather {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
     private static String text;              // last good line, main thread only
+    private static String spoken;            // the same with the condition in words, for TalkBack
+    private static int code = -1;            // WMO weather code of that line, -1 before the first reading
+    private static boolean day = true;       // Open-Meteo's is_day for that line
     private static long fetchedAt = -1;      // elapsedRealtime of the last good line
     private static long failedAt = -1;       // elapsedRealtime of the last failure
     private static boolean inFlight;
@@ -54,38 +58,78 @@ final class Weather {
             else if (v == tv) known = true;
         }
         if (!known) targets.add(new WeakReference<>(tv));
-        if (text != null) show(tv, text);
+        if (text != null) show(tv);
         long now = SystemClock.elapsedRealtime();
         boolean fresh = text != null && fetchedAt >= 0 && now - fetchedAt < FRESH_MS;
         boolean backingOff = failedAt >= 0 && now - failedAt < RETRY_MS;
         if (fresh || backingOff || inFlight) return;
         inFlight = true;
         IO.execute(() -> {
-            String line = fetch();
+            Reading reading = fetch();
             MAIN.post(() -> {
                 inFlight = false;
                 long t = SystemClock.elapsedRealtime();
-                if (line == null) {
+                if (reading == null) {
                     failedAt = t;
                     return;
                 }
-                text = line;
+                text = reading.line;
+                spoken = reading.spoken;
+                code = reading.code;
+                day = reading.day;
                 fetchedAt = t;
                 failedAt = -1;
                 for (WeakReference<TextView> ref : targets) {
                     TextView v = ref.get();
-                    if (v != null) show(v, line);
+                    if (v != null) show(v);
                 }
             });
         });
     }
 
-    private static void show(TextView tv, String line) {
-        tv.setText(line);
+    /** The WMO weather code of the last reading, or -1 before the first one. Main thread. */
+    static int code() {
+        return code;
+    }
+
+    /** Open-Meteo's is_day for the last reading: false between sunset and sunrise; true before the first one. */
+    static boolean isDay() {
+        return day;
+    }
+
+    /**
+     * The line, after a line icon for the weather (WeatherIcon) in the text's own colour and opacity, about 1.3 times
+     * the text's height: the icon carries the condition, the words stay for TalkBack.
+     */
+    private static void show(TextView tv) {
+        tv.setText(text);
+        tv.setContentDescription(spoken);
+        int icon = WeatherIcon.forCode(code, day);
+        Drawable d = icon == 0 ? null : tv.getContext().getDrawable(icon);
+        if (d != null) {
+            int size = Math.round(tv.getTextSize() * 1.3f);
+            d.setBounds(0, 0, size, size);
+            tv.setCompoundDrawablePadding(Math.round(tv.getTextSize() * 0.4f));
+            tv.setCompoundDrawableTintList(tv.getTextColors());
+        }
+        tv.setCompoundDrawablesRelative(d, null, null, null);
         tv.setVisibility(View.VISIBLE);
     }
 
-    private static String fetch() {
+    private static final class Reading {
+        final String line, spoken;
+        final int code;
+        final boolean day;
+
+        Reading(String line, String spoken, int code, boolean day) {
+            this.line = line;
+            this.spoken = spoken;
+            this.code = code;
+            this.day = day;
+        }
+    }
+
+    private static Reading fetch() {
         HttpURLConnection conn = null;
         try {
             conn = (HttpURLConnection) new URL(urlString).openConnection();
@@ -101,8 +145,10 @@ final class Weather {
             org.json.JSONObject current = new org.json.JSONObject(out.toString("UTF-8")).getJSONObject("current");
             double temp = current.getDouble("temperature_2m");
             double apparent = current.optDouble("apparent_temperature", temp);
-            return Math.round(temp) + "°C · " + condition(current.getInt("weather_code"))
-                    + " · Känns som " + Math.round(apparent) + "°C";
+            int wmo = current.getInt("weather_code");
+            String feels = " · Känns som " + Math.round(apparent) + "°C";
+            return new Reading(Math.round(temp) + "°C" + feels,
+                    Math.round(temp) + "°C · " + condition(wmo) + feels, wmo, current.optInt("is_day", 1) != 0);
         } catch (Exception e) {
             return null;
         } finally {

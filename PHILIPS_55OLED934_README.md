@@ -179,3 +179,21 @@ the screensaver setting and the launcher's compiled state all survived, and all 
   picture; a GPU without a usable ES 2 config keeps the plain glow instead.
 - Measured on the TV (Mali-G51): GPU about 6 ms per frame (p50), launcher CPU 5-6 % while the screensaver shows,
   0 % and no GL thread once it closes. 30 fps cost 10-12 % CPU, so the rate is 15 fps.
+
+### Home premium pass and weather screensaver (2026-11-26)
+
+- Home: focus starts on the app usually opened at this time of day (`habit_focus`); a soft entrance when Home shows
+  (`soft_entrance`); aura and glow a little warmer in the evening (`time_warmth`); weather as a thin line icon in the
+  font's style instead of the word; the white ring round the focused app is off (`focus_rim`, switch in Launcher
+  settings); the remote's Settings key opens the panel under the gear.
+- Off by default, with switches in Launcher settings, because they cost frames on this TV: UI sounds (`ui_sounds`,
+  janky about 9 % to 22-48 %) and the lean on focus (`focus_tilt`, 5 degrees for 320 ms on screen, janky median 9 to 49
+  per run in an A/B). Both wait for tuning.
+- Settings in Launcher settings survive `pm install -r`; they were lost on 2026-10-31 only because the launcher had to
+  be uninstalled when the signing key changed.
+- Screensaver: the aurora now draws in a TextureView. As a SurfaceView, Philips' `org.droidtv.tvsystemui` took it for
+  video and put its bouncing Bowers & Wilkins logo on top after a few minutes. Weather scenes from the forecast
+  (aurora on clear nights, snow, rain, fog), a day rhythm (dark day sky, warm horizon at dawn and dusk, aurora
+  strongest mid-night) and a night mode 23:00-06:00 (warm red clock, scene at about 20 %). 30 fps, GPU 6-10 ms per
+  frame, launcher CPU about 25 % while the screensaver shows, 0 % once it closes. New keys `clock_weather_scenes`,
+  `clock_night_mode`.

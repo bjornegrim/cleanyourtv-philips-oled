@@ -1,7 +1,9 @@
 package com.gathin.tvhome;
 
 import android.animation.ArgbEvaluator;
+import android.animation.ValueAnimator;
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -16,8 +18,10 @@ import android.util.DisplayMetrics;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
+import android.widget.TextView;
 
 import java.io.File;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -40,6 +44,11 @@ final class ClockScene {
     private static final long GLOW_STEP_MS = 500L;
     /** Deep, low-brightness glow colours; the glow is drawn at partial alpha on black. */
     private static final int[] PALETTE = {0xFF2B5CFF, 0xFF00A39A, 0xFF8A3FFC, 0xFFE0661B, 0xFFD6336C};
+    /** clock_night_mode: warm red at low light, nothing that lights up the room. */
+    private static final int NIGHT_RED = 0xFFB0402A;
+    /** Night colours of the time, AM/PM, date and weather row, as the mockup (13-skarmslackare-vader). */
+    private static final int[] NIGHT_TEXT = {0xFFB0402A, 0x99B0402A, 0xFF8A3322, 0xFF7A2D1F};
+    private static final ArgbEvaluator NIGHT_MIX = new ArgbEvaluator();
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Random random = new Random();
@@ -53,8 +62,18 @@ final class ClockScene {
     private boolean wallpaperShown;
     /** clock_glow false: plain black behind the clock, whether or not a picture shows. */
     private boolean glowOff;
-    /** clock_aurora: northern lights under the glow, only while the glow shows on black. */
+    /** clock_aurora: the sky behind the clock (AuroraView), only while the glow shows on black; it draws the glow too. */
     private AuroraView aurora;
+    /** clock_weather_scenes: the sky follows the weather and the time of day, not only the plain aurora night. */
+    private boolean weatherScenes;
+    /** clock_night_mode: from 23:00 to 06:00 the clock turns warm red and the sky dim (WeatherScene.nightMode). */
+    private boolean nightModeOn;
+    /** Night mode's share now, 0 to 1, fading over 2 s; the clock's text views and their own colours. */
+    private float night;
+    private ValueAnimator nightFade;
+    private final List<TextView> texts = new ArrayList<>();
+    private final List<Integer> textColors = new ArrayList<>();
+    private String sunLatitude = "", sunLongitude = "";
     /** clock_wallpaper: the picture start() decodes, its darkening, and the resources to draw it with. */
     private File wallpaperFile;
     private int wallpaperShade;
@@ -75,6 +94,10 @@ final class ClockScene {
             moveClock();
             shiftGlow();
             advanceWallpaper();
+            updateNight(true);
+            // Weather.code() and isDay() only move on a fetch; bind fetches when its reading is 20 minutes old
+            Weather.bind(content.findViewById(R.id.dreamWeather));
+            if (aurora != null) aurora.scene(sceneNow());
             handler.postDelayed(this, MOVE_MS);
         }
     };
@@ -102,7 +125,11 @@ final class ClockScene {
         handler.removeCallbacks(tick);
         handler.postDelayed(tick, MOVE_MS);
         clockRefresh.start();
-        if (aurora != null) aurora.start();
+        updateNight(false);
+        if (aurora != null) {
+            aurora.scene(sceneNow());
+            aurora.start();
+        }
         if (wallpaperFile != null && !wallpaperShown) loadWallpaper();
     }
 
@@ -110,6 +137,7 @@ final class ClockScene {
         handler.removeCallbacksAndMessages(null);   // the tick and any glow steps still queued
         clockRefresh.stop();
         if (aurora != null) aurora.stop();
+        if (nightFade != null) nightFade.cancel();
         content.animate().cancel();
         wallpaperGeneration++;   // a decode still running must not attach its picture to a stopped scene
     }
@@ -131,12 +159,17 @@ final class ClockScene {
         // clock_glow false: plain black behind the clock (OLED); the clock itself still moves every minute.
         glowOff = !cfg.clockGlow;
         if (glowOff) ambient.setBackground(null);
+        nightModeOn = cfg.clockNightMode;
+        weatherScenes = cfg.clockWeatherScenes;
+        sunLatitude = ctx.getString(R.string.latitude);
+        sunLongitude = ctx.getString(R.string.longitude);
         // clock_aurora: only where the glow shows on black, so not under a clock_wallpaper picture.
-        if (cfg.clockAurora && !glowOff && aurora == null && (!cfg.clockWallpaper || cfg.wallpapers.isEmpty())
-                && AuroraView.supported()) {
-            aurora = new AuroraView(ctx, glowColor);
+        if (cfg.clockAurora && !glowOff && aurora == null && (!cfg.clockWallpaper || cfg.wallpapers.isEmpty())) {
+            aurora = new AuroraView(ctx, glowColor, sceneNow(), this::auroraFailed);
             ((ViewGroup) ambient.getParent()).addView(aurora, 0,
                     new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            // the sky draws the glow itself: a full-screen gradient redrawn with every frame cost more
+            ambient.setBackground(null);
         }
         if (!cfg.clockWallpaper) return;
         // What Home plays, and Config puts the single wallpaper in it when a theme has no collection.
@@ -256,8 +289,9 @@ final class ClockScene {
         content.setX(x);
         content.setY(y);
         if (parent.getWidth() > 0 && parent.getHeight() > 0) {
-            glow.setGradientCenter((x + content.getWidth() / 2f) / parent.getWidth(),
-                    (y + content.getHeight() / 2f) / parent.getHeight());
+            float fx = (x + content.getWidth() / 2f) / parent.getWidth(), fy = (y + content.getHeight() / 2f) / parent.getHeight();
+            glow.setGradientCenter(fx, fy);
+            if (aurora != null) aurora.clock(fx, fy);
         }
     }
 
@@ -276,7 +310,99 @@ final class ClockScene {
 
     private void setGlow(int color) {
         glowColor = color;
-        int c = color & 0x00FFFFFF;
-        glow.setColors(new int[]{0x40000000 | c, 0x14000000 | c, 0x00000000 | c});
+        // night mode: warm red, at a fifth of the strength
+        int c = (int) NIGHT_MIX.evaluate(night, color, NIGHT_RED) & 0x00FFFFFF;
+        float k = 1f - 0.78f * night;
+        glow.setColors(new int[]{Math.round(0x40 * k) << 24 | c, Math.round(0x14 * k) << 24 | c, c});
+    }
+
+    /** The sky (AuroraView) could not draw on this TV: back to the plain glow, as without clock_aurora. */
+    private void auroraFailed() {
+        if (aurora == null) return;
+        aurora.stop();
+        ((ViewGroup) aurora.getParent()).removeView(aurora);
+        aurora = null;
+        if (!glowOff && !wallpaperShown) ambient.setBackground(glow);
+    }
+
+    /** The weather scene for now: the weather, the time against the sun, and night mode (WeatherScene). */
+    private float[] sceneNow() {
+        LocalDateTime now = LocalDateTime.now();
+        int minute = now.getHour() * 60 + now.getMinute();
+        boolean nightNow = nightModeOn && WeatherScene.nightMode(minute);
+        if (!weatherScenes) return WeatherScene.plain(nightNow);
+        int[] times = WallpaperMood.sun(now.toLocalDate(), sunLatitude, sunLongitude, ZoneId.systemDefault());
+        int sun = WeatherScene.SUN_NORMAL;
+        if (polar(now.toLocalDate())) {
+            // Sun has no rise or set today; Open-Meteo's is_day tells which, or else the season does
+            boolean summer = (latitude() >= 0) == (now.getMonthValue() >= 4 && now.getMonthValue() <= 9);
+            sun = (Weather.code() >= 0 ? Weather.isDay() : summer) ? WeatherScene.MIDNIGHT_SUN : WeatherScene.POLAR_NIGHT;
+        }
+        boolean day = Weather.code() >= 0 ? Weather.isDay() : WeatherScene.isDay(minute, times[0], times[1], sun);
+        double hour = minute / 60.0 + now.getSecond() / 3600.0;
+        return WeatherScene.scene(WeatherScene.pick(Weather.code(), day), hour, times[0] / 60.0, times[1] / 60.0, sun,
+                nightNow);
+    }
+
+    /** Whether the configured place has no sunrise or sunset today; false when there is no place (WallpaperMood's times). */
+    private boolean polar(LocalDate date) {
+        try {
+            if (sunLatitude.trim().isEmpty() || sunLongitude.trim().isEmpty()) return false;
+            return Sun.riseAndSet(date, latitude(), Double.parseDouble(sunLongitude.trim()), ZoneId.systemDefault()) == null;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private double latitude() {
+        try {
+            return Double.parseDouble(sunLatitude.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /**
+     * clock_night_mode: the clock, the date and the weather row warm red from 23:00 to 06:00, the glow too, fading over
+     * 2 s (at once when the screensaver starts). The sky dims itself from WeatherScene's night number.
+     */
+    private void updateNight(boolean fade) {
+        if (!nightModeOn) return;
+        if (texts.isEmpty()) collectTexts(content);
+        LocalDateTime now = LocalDateTime.now();
+        float target = WeatherScene.nightMode(now.getHour() * 60 + now.getMinute()) ? 1f : 0f;
+        if (nightFade != null) nightFade.cancel();
+        if (!fade || target == night) {
+            applyNight(target);
+            return;
+        }
+        nightFade = ValueAnimator.ofFloat(night, target);
+        nightFade.setDuration(WeatherScene.FADE_MS);
+        nightFade.addUpdateListener(a -> applyNight((float) a.getAnimatedValue()));
+        nightFade.start();
+    }
+
+    private void applyNight(float amount) {
+        night = amount;
+        for (int i = 0; i < texts.size(); i++) {
+            int warm = NIGHT_TEXT[Math.min(i, NIGHT_TEXT.length - 1)];
+            int color = (int) NIGHT_MIX.evaluate(amount, textColors.get(i), warm);
+            TextView v = texts.get(i);
+            v.setTextColor(color);
+            // the weather row's icon is tinted in the text's colour (Weather.show)
+            if (v.getCompoundDrawablesRelative()[0] != null) v.setCompoundDrawableTintList(ColorStateList.valueOf(color));
+        }
+        if (!wallpaperShown && !glowOff) setGlow(glowColor);
+    }
+
+    /** The clock's text views in layout order (time, AM/PM, date, weather) and the colours the layout gave them. */
+    private void collectTexts(View v) {
+        if (v instanceof TextView) {
+            texts.add((TextView) v);
+            textColors.add(((TextView) v).getCurrentTextColor());
+        } else if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) collectTexts(g.getChildAt(i));
+        }
     }
 }

@@ -10,7 +10,7 @@ final class WeatherUrl {
             double lon = Double.parseDouble(longitude.trim());
             if (!(Math.abs(lat) <= 90) || !(Math.abs(lon) <= 180)) return null;   // also rejects NaN
             return "https://api.open-meteo.com/v1/forecast?latitude=" + lat + "&longitude=" + lon
-                    + "&current=temperature_2m,apparent_temperature,weather_code&timezone=auto";
+                    + "&current=temperature_2m,apparent_temperature,weather_code,is_day&timezone=auto";
         } catch (RuntimeException e) {
             return null;
         }

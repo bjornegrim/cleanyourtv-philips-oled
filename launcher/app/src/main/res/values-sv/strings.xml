@@ -122,6 +122,9 @@
     <string name="screensaver_delay_label">Skärmsläckarfördröjning</string>
     <string name="screensaver_delay_state">Skärmsläckarfördröjning: %1$s</string>
     <string name="fast_screensaver_label">Snabbstart av skärmsläckare: %1$s</string>
+    <string name="ui_sounds_state">Gränssnittsljud: %1$s</string>
+    <string name="focus_rim_state">Vit ram runt vald app: %1$s</string>
+    <string name="focus_tilt_state">Lutning vid fokus: %1$s</string>
     <string name="game_live">Direkt nu</string>
     <string name="clock_format_system">System</string>
     <string name="clock_format_12">12 timmar</string>

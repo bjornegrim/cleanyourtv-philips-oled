@@ -25,6 +25,8 @@ public class ClockDream extends DreamService {
         ClockFormat.apply(getWindow().getDecorView(), Config.load(this).clockFormat);
         scene = new ClockScene(getWindow().getDecorView());
         scene.useHomeWallpaper(this);
+        // the weather row, as ClockActivity; it also keeps the weather scenes (clock_weather_scenes) current
+        Weather.bind(findViewById(R.id.dreamWeather));
     }
 
     @Override
